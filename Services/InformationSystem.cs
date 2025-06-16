@@ -1,8 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
+using System.Linq;
 
 using InfoSystem.Models;
 
@@ -14,18 +13,18 @@ namespace InfoSystem.Services
         private readonly WebScrapingService _scrapingService;
 
         public InformationSystemService(string connectionString, string databaseName,
-            string googleApiKey = null, string googleCseId = null, string bingApiKey = null)
+            string googleApiKey = null, string googleCseId = null, string serpApiKey = null)
         {
             _mongoService = new MongoDbService(connectionString, databaseName);
-            _scrapingService = new WebScrapingService(googleApiKey, googleCseId, bingApiKey);
+            _scrapingService = new WebScrapingService(googleApiKey, googleCseId, serpApiKey);
         }
 
-        public async Task CollectArticlesAsync(string topic, int maxArticles = 5)
+        public async Task CollectArticlesAsync(string topic, int maxArticles = 5, string searchEngine = "auto")
         {
-            Console.WriteLine($"\n{'='} СБОР СТАТЕЙ ПО ТЕМЕ: {topic.ToUpper()} {'='}");
+            Console.WriteLine($"=== Сбор статей по теме '{topic}' через {searchEngine} ===");
 
             var startTime = DateTime.Now;
-            var articles = await _scrapingService.SearchAndParseArticlesAsync(topic, maxArticles);
+            var articles = await _scrapingService.SearchAndParseArticlesAsync(topic, maxArticles, searchEngine);
             var duration = DateTime.Now - startTime;
 
             foreach (var article in articles)
@@ -62,7 +61,7 @@ namespace InfoSystem.Services
             var totalCount = await _mongoService.GetArticlesCountAsync();
 
             Console.WriteLine($"\n📈 СТАТИСТИКА БАЗЫ ДАННЫХ");
-            Console.WriteLine($"{'=' * 40}");
+            Console.WriteLine(new string('=', 40));
             Console.WriteLine($"Всего статей: {totalCount}");
             Console.WriteLine($"Уникальных тем: {topics.Count}");
 

@@ -1,27 +1,36 @@
 ﻿using System;
-using System.Threading.Tasks;
+
 using InfoSystem.Services;
-using InfoSystem.Models;
-using System.Collections.Generic;
 
 namespace InfoSystem
 {
     class Program
     {
-        // Укажи здесь свои параметры подключения и ключи, если есть
+        // Настройки подключения и API ключей
         private const string MongoConnectionString = "mongodb://localhost:27017";
         private const string DatabaseName = "InfoSystemDb";
 
-        // Если есть Google API ключи, укажи их
         private const string GoogleApiKey = null; // "YOUR_GOOGLE_API_KEY";
         private const string GoogleCseId = null;  // "YOUR_GOOGLE_CSE_ID";
 
-        // Или Bing API ключ
-        private const string BingApiKey = "8878d112f3aec3f402ffc464941ed9f1fa6d931f41a2c26409f6921d4c71d35d";   // "YOUR_BING_API_KEY";
+        private const string serpApiKey = "8878d112f3aec3f402ffc464941ed9f1fa6d931f41a2c26409f6921d4c71d35d";
+        private static string currentSearchEngine = "auto";
 
         static async Task Main(string[] args)
         {
-            var infoService = new InformationSystemService(MongoConnectionString, DatabaseName, GoogleApiKey, GoogleCseId, BingApiKey);
+            InformationSystemService infoService;
+
+            // Проверка подключения
+            try
+            {
+                infoService = new InformationSystemService(MongoConnectionString, DatabaseName, GoogleApiKey, GoogleCseId, serpApiKey);
+                Console.WriteLine("✅ Подключение к базе данных успешно.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Ошибка подключения к базе данных: {ex.Message}");
+                return;
+            }
 
             bool exit = false;
 
@@ -32,6 +41,7 @@ namespace InfoSystem
                 Console.WriteLine("2. Поиск по базе");
                 Console.WriteLine("3. Показать статистику");
                 Console.WriteLine("4. Очистить базу данных");
+                Console.WriteLine("5. Выбрать тип поиска (сейчас: " + currentSearchEngine + ")");
                 Console.WriteLine("0. Выход");
                 Console.Write("Выберите действие: ");
 
@@ -49,49 +59,98 @@ namespace InfoSystem
                         await infoService.ShowStatisticsAsync();
                         break;
                     case "4":
-                        await infoService.ClearDatabaseAsync();
+                        await ConfirmAndClearDatabaseAsync(infoService);
+                        break;
+                    case "5":
+                        ChooseSearchEngine();
                         break;
                     case "0":
                         exit = true;
                         break;
                     default:
-                        Console.WriteLine("Неверный ввод, попробуйте снова.");
+                        Console.WriteLine("⚠️ Неверный ввод, попробуйте снова.");
                         break;
                 }
             }
 
-            Console.WriteLine("До свидания!");
+            Console.WriteLine("👋 До свидания!");
         }
 
         private static async Task CollectArticlesAsync(InformationSystemService service)
         {
-            Console.Write("Введите тему для сбора статей: ");
+            Console.Write("🔎 Введите тему для сбора статей: ");
             var topic = Console.ReadLine()?.Trim();
 
             if (string.IsNullOrEmpty(topic))
             {
-                Console.WriteLine("Тема не может быть пустой.");
+                Console.WriteLine("⚠️ Тема не может быть пустой.");
                 return;
             }
 
-            Console.Write("Введите максимальное количество статей (по умолчанию 5): ");
-            var maxInput = Console.ReadLine();
-
             int maxArticles = 5;
-            if (!string.IsNullOrEmpty(maxInput) && int.TryParse(maxInput, out int parsedMax) && parsedMax > 0)
+            while (true)
             {
-                maxArticles = parsedMax;
+                Console.Write("🔢 Введите максимальное количество статей (по умолчанию 5): ");
+                var input = Console.ReadLine();
+
+                if (string.IsNullOrEmpty(input))
+                    break;
+
+                if (int.TryParse(input, out int parsed) && parsed > 0)
+                {
+                    maxArticles = parsed;
+                    break;
+                }
+                Console.WriteLine("⚠️ Некорректное значение. Попробуйте снова.");
             }
 
             await service.CollectArticlesAsync(topic, maxArticles);
         }
 
+        private static void ChooseSearchEngine()
+        {
+            Console.WriteLine("\n=== ВЫБОР ПОИСКОВОГО ДВИЖКА ===");
+            Console.WriteLine("1. Google Custom Search (нужны API ключи)");
+            Console.WriteLine("2. SerpAPI (использует serp, нужен ключ)");
+            Console.WriteLine("3. DuckDuckGo (без ключей)");
+            Console.WriteLine("4. Автоматический выбор (по наличию ключей)");
+            Console.Write("Введите номер: ");
+
+            var input = Console.ReadLine();
+            switch (input)
+            {
+                case "1":
+                    currentSearchEngine = "google";
+                    break;
+                case "2":
+                    currentSearchEngine = "serp";
+                    break;
+                case "3":
+                    currentSearchEngine = "duckduckgo";
+                    break;
+                case "4":
+                    currentSearchEngine = "auto";
+                    break;
+                default:
+                    Console.WriteLine("⚠️ Неверный выбор. Оставлен текущий тип.");
+                    return;
+            }
+
+            Console.WriteLine($"✅ Установлен тип поиска: {currentSearchEngine}");
+        }
+
         private static async Task SearchArticlesAsync(InformationSystemService service)
         {
-            Console.Write("Введите поисковый запрос: ");
+            Console.Write("🔍 Введите поисковый запрос: ");
             var query = Console.ReadLine()?.Trim();
 
-            Console.Write("Введите тему для фильтрации (необязательно): ");
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                Console.WriteLine("⚠️ Поисковый запрос не может быть пустым.");
+                return;
+            }
+
+            Console.Write("🎯 Введите тему для фильтрации (необязательно): ");
             var topic = Console.ReadLine()?.Trim();
 
             int limit = 10;
@@ -99,6 +158,22 @@ namespace InfoSystem
             var results = await service.SearchInternalAsync(query, string.IsNullOrEmpty(topic) ? null : topic, limit);
 
             service.DisplaySearchResults(results);
+        }
+
+        private static async Task ConfirmAndClearDatabaseAsync(InformationSystemService service)
+        {
+            Console.Write("⚠️ Вы уверены, что хотите удалить все данные? (yes/no): ");
+            var confirm = Console.ReadLine()?.Trim().ToLower();
+
+            if (confirm == "yes" || confirm == "y")
+            {
+                await service.ClearDatabaseAsync();
+                Console.WriteLine("🗑️ База данных очищена.");
+            }
+            else
+            {
+                Console.WriteLine("❌ Отмена очистки базы данных.");
+            }
         }
     }
 }

@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+
 using MongoDB.Bson.Serialization.Attributes;
 
 namespace InfoSystem.Models
@@ -48,23 +46,6 @@ namespace InfoSystem.Models
     {
         public string Title { get; set; }
         public string Link { get; set; }
-        public string Snippet { get; set; }
-    }
-
-    public class BingSearchResponse
-    {
-        public WebPages WebPages { get; set; }
-    }
-
-    public class WebPages
-    {
-        public List<BingSearchItem> Value { get; set; } = new List<BingSearchItem>();
-    }
-
-    public class BingSearchItem
-    {
-        public string Name { get; set; }
-        public string Url { get; set; }
         public string Snippet { get; set; }
     }
 }
