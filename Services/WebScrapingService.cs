@@ -72,6 +72,17 @@ namespace InfoSystem.Services
                         searchResults = await DuckDuckGoSearchAsync(topic, maxResults);
                         break;
 
+                    // Добавить в switch case метода SearchAndParseArticlesAsync:
+                    case "sciencedirect":
+                        Console.WriteLine("🌐 Поисковик: ScienceDirect");
+                        searchResults = await ScienceDirectSearchAsync(topic, maxResults);
+                        break;
+
+                    case "scholar":
+                        Console.WriteLine("🌐 Поисковик: Google Scholar");
+                        searchResults = await GoogleScholarSearchAsync(topic, maxResults);
+                        break;
+
                     case "auto":
                     default:
                         // текущая логика по умолчанию
@@ -216,7 +227,94 @@ namespace InfoSystem.Services
                 return new List<SearchResult>();
             }
         }
+        private async Task<List<SearchResult>> ScienceDirectSearchAsync(string query, int maxResults)
+        {
+            try
+            {
+                var encodedQuery = HttpUtility.UrlEncode(query);
+                var url = $"https://www.sciencedirect.com/search?qs={encodedQuery}&show=25";
 
+                var response = await _httpClient.GetStringAsync(url);
+                var doc = new HtmlDocument();
+                doc.LoadHtml(response);
+
+                var results = new List<SearchResult>();
+                var articles = doc.DocumentNode.SelectNodes("//h2[@class='result-list-title-link']/a");
+
+                if (articles != null)
+                {
+                    foreach (var article in articles.Take(maxResults))
+                    {
+                        var title = article.InnerText?.Trim();
+                        var href = article.GetAttributeValue("href", "");
+                        var fullUrl = href.StartsWith("http") ? href : "https://www.sciencedirect.com" + href;
+
+                        results.Add(new SearchResult
+                        {
+                            Title = title,
+                            Url = fullUrl,
+                            Snippet = "Научная статья из ScienceDirect"
+                        });
+                    }
+                }
+
+                return results;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"ScienceDirect ошибка: {ex.Message}");
+                return new List<SearchResult>();
+            }
+        }
+
+        private async Task<List<SearchResult>> GoogleScholarSearchAsync(string query, int maxResults)
+        {
+            try
+            {
+                var encodedQuery = HttpUtility.UrlEncode(query);
+                var url = $"https://scholar.google.com/scholar?q={encodedQuery}&num={maxResults}";
+
+                // Добавляем заголовки для Scholar
+                using var client = new HttpClient();
+                client.DefaultRequestHeaders.Add("User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+
+                var response = await client.GetStringAsync(url);
+                var doc = new HtmlDocument();
+                doc.LoadHtml(response);
+
+                var results = new List<SearchResult>();
+                var articles = doc.DocumentNode.SelectNodes("//div[@class='gs_r gs_or gs_scl']");
+
+                if (articles != null)
+                {
+                    foreach (var article in articles.Take(maxResults))
+                    {
+                        var titleNode = article.SelectSingleNode(".//h3[@class='gs_rt']/a");
+                        var title = titleNode?.InnerText?.Trim();
+                        var articleUrl = titleNode?.GetAttributeValue("href", "");
+                        var snippet = article.SelectSingleNode(".//div[@class='gs_rs']")?.InnerText?.Trim();
+
+                        if (!string.IsNullOrEmpty(title) && !string.IsNullOrEmpty(articleUrl))
+                        {
+                            results.Add(new SearchResult
+                            {
+                                Title = CleanText(title),
+                                Url = articleUrl,
+                                Snippet = CleanText(snippet) ?? "Научная публикация из Google Scholar"
+                            });
+                        }
+                    }
+                }
+
+                return results;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Google Scholar ошибка: {ex.Message}");
+                return new List<SearchResult>();
+            }
+        }
 
         private async Task<List<SearchResult>> DuckDuckGoSearchAsync(string query, int maxResults)
         {
