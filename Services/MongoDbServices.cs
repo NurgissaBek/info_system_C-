@@ -5,6 +5,7 @@ using MongoDB.Bson;
 using System.Threading.Tasks;
 using System.Linq;
 using InfoSystem.Models;
+using System.Text.RegularExpressions;
 
 namespace InfoSystem.Services
 {
@@ -59,7 +60,7 @@ namespace InfoSystem.Services
             }
         }
 
-        // Методы для статей (существующие)
+        // Методы для статей (улучшенный поиск)
         public async Task SaveArticleAsync(ArticleDocument article)
         {
             var existing = await _articlesCollection.Find(x => x.Url == article.Url).FirstOrDefaultAsync();
@@ -74,19 +75,156 @@ namespace InfoSystem.Services
             }
         }
 
+        // Улучшенный метод поиска с более точным поиском по темам
         public async Task<List<ArticleDocument>> SearchArticlesAsync(string query, string topic = null, int limit = 20)
         {
             var filterBuilder = Builders<ArticleDocument>.Filter;
             var filters = new List<FilterDefinition<ArticleDocument>>();
 
+            // Обработка поискового запроса
             if (!string.IsNullOrEmpty(query))
             {
-                filters.Add(filterBuilder.Text(query));
+                // Извлекаем ключевые слова из запроса
+                var searchTerms = ExtractSearchTerms(query);
+
+                if (searchTerms.Any())
+                {
+                    var searchFilters = new List<FilterDefinition<ArticleDocument>>();
+
+                    foreach (var term in searchTerms)
+                    {
+                        // Поиск по названию (более высокий приоритет)
+                        var titleFilter = filterBuilder.Regex(x => x.Title, new BsonRegularExpression(term, "i"));
+
+                        // Поиск по содержимому
+                        var contentFilter = filterBuilder.Regex(x => x.Content, new BsonRegularExpression(term, "i"));
+
+                        // Поиск по ключевым словам
+                        var keywordsFilter = filterBuilder.AnyEq(x => x.Metadata.Keywords, term);
+
+                        // Поиск по теме в метаданных
+                        var topicFilter = filterBuilder.Regex(x => x.Metadata.Topic, new BsonRegularExpression(term, "i"));
+
+                        // Объединяем все варианты поиска для данного термина
+                        var termFilter = filterBuilder.Or(titleFilter, contentFilter, keywordsFilter, topicFilter);
+                        searchFilters.Add(termFilter);
+                    }
+
+                    // Требуем, чтобы найдены были все термины (И)
+                    if (searchFilters.Count > 1)
+                    {
+                        filters.Add(filterBuilder.And(searchFilters));
+                    }
+                    else
+                    {
+                        filters.Add(searchFilters.First());
+                    }
+                }
+                else
+                {
+                    // Fallback на полнотекстовый поиск если не удалось извлечь термины
+                    filters.Add(filterBuilder.Text(query));
+                }
+            }
+
+            // Фильтр по конкретной теме
+            if (!string.IsNullOrEmpty(topic))
+            {
+                // Точное совпадение или частичное совпадение по теме
+                var exactTopicFilter = filterBuilder.Eq(x => x.Metadata.Topic, topic);
+                var partialTopicFilter = filterBuilder.Regex(x => x.Metadata.Topic, new BsonRegularExpression(topic, "i"));
+                filters.Add(filterBuilder.Or(exactTopicFilter, partialTopicFilter));
+            }
+
+            var combinedFilter = filters.Count > 0
+                ? filterBuilder.And(filters)
+                : filterBuilder.Empty;
+
+            var results = await _articlesCollection.Find(combinedFilter)
+                .SortByDescending(x => x.Metadata.DateAdded)
+                .Limit(limit)
+                .ToListAsync();
+
+            // Если результатов мало, пробуем более мягкий поиск
+            if (results.Count==0 && !string.IsNullOrEmpty(query))
+            {
+                Console.WriteLine($"🔍 Найдено мало результатов ({results.Count}), пробую расширенный поиск...");
+                results = await FallbackSearchAsync(query, topic, limit);
+            }
+
+            return results;
+        }
+
+        // Дополнительный метод для извлечения ключевых терминов из запроса
+        private List<string> ExtractSearchTerms(string query)
+        {
+            var terms = new List<string>();
+
+            // Словарь сокращений и их полных форм
+            var abbreviations = new Dictionary<string, List<string>>
+            {
+                { "ии", new List<string> { "искусственный интеллект", "ИИ", "AI" } },
+                { "машинное обучение", new List<string> { "ML", "machine learning", "машинное обучение" } },
+                { "криптовалюта", new List<string> { "cryptocurrency", "крипто", "блокчейн", "биткоин" } },
+                { "образование", new List<string> { "образование", "обучение", "учеба", "университет", "школа" } },
+                { "медицина", new List<string> { "медицина", "здоровье", "лечение", "врач", "больница", "диагностика" } }
+            };
+
+            // Приводим к нижнему регистру для поиска
+            var lowerQuery = query.ToLower();
+
+            // Ищем точные совпадения аббревиатур
+            foreach (var abbrev in abbreviations)
+            {
+                if (lowerQuery.Contains(abbrev.Key))
+                {
+                    terms.AddRange(abbrev.Value);
+                }
+            }
+
+            // Извлекаем отдельные слова (минимум 3 символа)
+            var words = Regex.Split(query, @"\W+")
+                .Where(w => w.Length >= 3 && !string.IsNullOrWhiteSpace(w))
+                .Select(w => w.ToLower())
+                .Distinct()
+                .ToList();
+
+            terms.AddRange(words);
+
+            return terms.Distinct().ToList();
+        }
+
+        // Резервный метод поиска для случаев, когда основной поиск дает мало результатов
+        private async Task<List<ArticleDocument>> FallbackSearchAsync(string query, string topic, int limit)
+        {
+            var filterBuilder = Builders<ArticleDocument>.Filter;
+            var filters = new List<FilterDefinition<ArticleDocument>>();
+
+            // Разбиваем запрос на отдельные слова и ищем любое совпадение (ИЛИ)
+            var words = query.Split(new char[] { ' ', ',', '.', '!', '?' }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(w => w.Length >= 3)
+                .ToList();
+
+            if (words.Any())
+            {
+                var wordFilters = new List<FilterDefinition<ArticleDocument>>();
+
+                foreach (var word in words)
+                {
+                    var wordFilter = filterBuilder.Or(
+                        filterBuilder.Regex(x => x.Title, new BsonRegularExpression(word, "i")),
+                        filterBuilder.Regex(x => x.Content, new BsonRegularExpression(word, "i")),
+                        filterBuilder.Regex(x => x.Metadata.Topic, new BsonRegularExpression(word, "i"))
+                    );
+                    wordFilters.Add(wordFilter);
+                }
+
+                filters.Add(filterBuilder.Or(wordFilters));
             }
 
             if (!string.IsNullOrEmpty(topic))
             {
-                filters.Add(filterBuilder.Eq(x => x.Metadata.Topic, topic));
+                filters.Add(filterBuilder.Regex(x => x.Metadata.Topic, new BsonRegularExpression(topic, "i")));
             }
 
             var combinedFilter = filters.Count > 0
@@ -118,7 +256,7 @@ namespace InfoSystem.Services
             return await _articlesCollection.CountDocumentsAsync(filter);
         }
 
-        // Методы для анализов статей
+        // Методы для анализов статей (без изменений)
         public async Task SaveAnalysisAsync(ArticleAnalysis analysis)
         {
             var existing = await _analysisCollection.Find(x => x.ArticleId == analysis.ArticleId).FirstOrDefaultAsync();
@@ -162,7 +300,7 @@ namespace InfoSystem.Services
                 .ToListAsync();
         }
 
-        // Методы для вопросов-ответов
+        // Методы для вопросов-ответов (без изменений)
         public async Task SaveQuestionAnswerAsync(QuestionAnswer qa)
         {
             await _qaCollection.InsertOneAsync(qa);
@@ -186,7 +324,7 @@ namespace InfoSystem.Services
                 .ToListAsync();
         }
 
-        // Статистика
+        // Статистика (без изменений)
         public async Task<AnalysisStatistics> GetAnalysisStatisticsAsync()
         {
             var totalArticles = await GetArticlesCountAsync();
@@ -208,7 +346,7 @@ namespace InfoSystem.Services
             };
         }
 
-        // Очистка базы данных
+        // Очистка базы данных (без изменений)
         public async Task ClearDatabaseAsync()
         {
             await _articlesCollection.DeleteManyAsync(FilterDefinition<ArticleDocument>.Empty);
